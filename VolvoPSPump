@@ -1,0 +1,90 @@
+#include "mcp_can.h"
+#include <SPI.h>
+
+#define CAN0_INT 2                              // Set INT to pin 2
+#define CAN0_CS 10                              // Set CS to pin 10
+
+MCP_CAN CAN0(CAN0_CS);
+
+char msgString[128];//terrible way of comparing data
+
+long unsigned int rxId;//ID of incoming message
+unsigned char len = 0;
+unsigned char rxBuf[8];  
+
+long unsigned int hi = 0x1B200002;
+
+unsigned char keepAlive[8] = {0x00, 0x00, 0x22, 0xE0, 0x41, 0x90, 0x00, 0x00};//counter KA
+unsigned char speed[8] = {0xBB, 0x00, 0x3F, 0xFF, 0x06, 0xE0, 0x00, 0x00};//counter KA
+unsigned char slowRollTable[4] = { 0x00, 0x40, 0x80, 0xC0};
+
+unsigned long previousMillis = 0;
+const long interval = 15;//how fast we send
+int slowCounter; //Which number in array we at
+int slowRoll;
+int roll;//how many data messages we're sent, 0-30
+
+bool oHi = false;
+
+int potSpeed;
+int mapSpeed;
+
+
+void setup()
+{
+  
+  Serial.begin(9600);
+
+  CAN0.begin(MCP_ANY, CAN_500KBPS, MCP_8MHZ);
+  CAN0.setMode(MCP_NORMAL);                     // Set operation mode to normal so the MCP2515 sends acks to received data.
+  pinMode(CAN0_INT, INPUT);                     // Configuring pin for /INT input
+
+}
+ 
+void loop()
+{
+
+  unsigned long currentMillis = millis();
+
+// The speed will be determined by GPS later. Potentiometer for now.
+  potSpeed = analogRead(A0);
+  mapSpeed = map(potSpeed,0,1023,6000,0);
+  speed[6] = mapSpeed / 256;
+  speed[7] = mapSpeed % 256;
+  
+   if (oHi == true){
+       if (currentMillis - previousMillis >= interval) {
+        previousMillis = currentMillis;
+            if (roll == 0)
+            { 
+              CAN0.sendMsgBuf(0x1AE0092c, 1, 8, keepAlive); //send keep alive with roll
+              keepAlive[0] = slowRollTable[slowRoll];
+              slowRoll++;
+              if (slowRoll == 4){slowRoll = 0;}//reset slowroll
+            } 
+
+              CAN0.sendMsgBuf(0x2104136, 1, 8, speed); //send speed
+              roll++;
+              if (roll == 30){roll = 0;}//reset roll
+            }
+   }
+  
+// I believe this is the part where it waits for the first message from the pump. oHi never is reset to false. 
+// This is a one-time shot to tell the controller that the pump is ready for action.
+
+  if (!digitalRead(CAN0_INT))//Wait for some Can data to come in
+  {
+    CAN0.readMsgBuf(&rxId, &len, rxBuf);
+   
+        if ((rxId & 0x80000000) == 0x80000000)
+        sprintf(msgString, "%.8lX", (rxId & 0x1FFFFFFF));
+      
+    if (!strcmp(msgString, "1B200002")){//This is a workaround since extID is 29 bit and arduino is 8 bit.
+
+          oHi = true;
+        }
+ 
+  }
+
+
+}
