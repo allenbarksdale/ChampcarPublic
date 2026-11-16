@@ -1,1 +1,142 @@
+#include "canConst.h"
+
+lapTime convertLapTime(byte time0, byte time1, byte time2)
+// Helper function called by canbus function
+{
+    lapTime myLap;
+  
+    // 1. Reconstruct the 24-bit value
+    uint32_t rawTime = ((uint32_t)time0 << 16) | ((uint32_t)time1 << 8) | (uint32_t)time2;
+  
+    // 2. Extract full minutes
+    myLap.lapMinutes = (byte)(rawTime / 100000);
+  
+    // 3. Extract the remainder and convert to seconds
+    myLap.lapSeconds = ((float)(rawTime % 100000) / 100000.0f) * 60.0f;
+  
+    return myLap;
+}
+
+Transmission::Transmission(const float gearRatios[6], const float finalDrive_in, const float tireSizeMM) {
+
+    for (int i = 0; i < 6; i++) {
+        finalGearRatios[i] = gearRatios[i] * finalDrive_in;
+      }
+
+    speedMphToWheelRpmFactor = 26822.4 / (PI * tireSizeMM);
+    finalDrive = finalDrive_in;
+
+  } // constructor
+
+byte Transmission::getGear(byte speedMph, int engineRpm) {
+  // Handle stationary or low RPM situations (e.g., speed < 1.5 mph)
+  if (speedMph < 2 || engineRpm < 400.0) {
+    return 0; 
+  }
+  
+  // 1. Calculate Wheel RPM using our pre-calculated factor (1 multiplication)
+  float wheelRpm = speedMph * speedMphToWheelRpmFactor;
+  if (wheelRpm <= 0) return 0;
+  
+  // 2. Calculate the current overall ratio (1 division)
+  float currentTotalRatio = engineRpm / wheelRpm;
+  
+  // 3. Find the closest match using sequential early exit
+  int bestGear = 0;
+  float minDifference = 999.0;
+  
+  for (int i = 0; i < 6; i++) {
+    float difference = abs(currentTotalRatio - finalGearRatios[i]);
+    
+    if (difference < minDifference) {
+      // Differences are shrinking; we are getting closer to the current gear
+      minDifference = difference;
+      bestGear = i + 1;
+    } else {
+      // Sequential break: differences started growing, meaning we passed the best match!
+      break; 
+    }
+  }
+  
+  // 4. Tolerance check (returns 0/Neutral if clutch is pushed or shifting)
+  if (minDifference > (0.4 * finalDrive)) {
+    return 0; 
+  }
+  
+  return bestGear;
+}
+
+Accusump::Accusump(const byte goSpeed_in, const int deltaPSI_in, const byte triggerPin_in, const byte oilPressurePin_in, const byte sumpPressurePin_in)
+  {
+    goSpeed = goSpeed_in;
+    deltaPSI = deltaPSI_in;
+    triggerPin = triggerPin_in;
+    oilPressurePin = oilPressurePin_in;
+    sumpPressurePin = sumpPressurePin_in;
+
+    pinMode(triggerPin, OUTPUT);   // Set the pin as output
+    pinMode(oilPressurePin, INPUT);
+    pinMode(sumpPressurePin, INPUT);
+
+    digitalWrite(triggerPin, LOW);
+  }
+
+void Accusump::setIt(byte speed)
+  {
+    oilPressure = map(analogRead(oilPressurePin), 95, 922, 0, 100);
+    sumpPressure = map(analogRead(sumpPressurePin), 95, 922, 0, 100);
+   
+    if (speed >= goSpeed)
+    {
+      int accusumpDiff = (int)oilPressure - (int)sumpPressure;
+      
+      if(accusumpDiff >= 0 && accuOn)
+      {
+        digitalWrite(triggerPin, LOW);
+        accuOn = false;
+        accuChanged = true;
+      }
+      else if (accusumpDiff <= deltaPSI && !accuOn)
+      {
+        digitalWrite(triggerPin, HIGH);
+        accuOn = true;
+        accuChanged = true;
+      }
+    }
+    else if (accuOn)
+    {
+      digitalWrite(triggerPin, LOW);
+      accuOn = false;
+      accuChanged = true;
+    }
+  }
+  
+boolean Accusump::getState()
+  {return accuOn;}
+    
+boolean Accusump::getChanged()
+  {
+    // the temp logic is here because "return" ends the function, so I can't change the value after the return.
+    boolean tempChanged = accuChanged;
+    accuChanged = false;
+    return tempChanged;
+  }
+
+byte Accusump::getOilPressure()
+  {return oilPressure;}
+
+byte Accusump::getSumpPressure()
+  {return sumpPressure;}
+
+void Accusump::resetChanged()
+  {accuChanged = false;}
+    
+
+uint16_t TwoBytesToInt(uint8_t b1, uint8_t b2, bool isBigEndian) {
+    if (isBigEndian) {
+        return ((uint16_t)b1 << 8) | b2; // b1 = MSB, b2 = LSB
+    }
+    return ((uint16_t)b2 << 8) | b1;     // b2 = MSB, b1 = LSB
+}
+
 
